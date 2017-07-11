@@ -1,5 +1,4 @@
 <?php
-
 /**
  * staticMapLite 0.3.1
  *
@@ -41,8 +40,8 @@ Class staticMapLite
     );
 
     protected $tileDefaultSrc = 'mapnik';
-    protected $markerBaseDir = 'images/markers';
-    protected $osmLogo = 'images/osm_logo.png';
+    protected $markerBaseDir = '../data/OSMmarkers';
+	protected $osmLogo = '../data/OSMmarkers/osm_logo.png';
 
     protected $markerPrototypes = array(
         // found at http://www.mapito.net/map-marker-icons.html
@@ -79,13 +78,16 @@ Class staticMapLite
     protected $useTileCache = true;
     protected $tileCacheBaseDir = '../cache/tiles';
 
-    protected $useMapCache = true;
+    //protected $useMapCache = true;
+	protected $useMapCache = false;
     protected $mapCacheBaseDir = '../cache/maps';
     protected $mapCacheID = '';
     protected $mapCacheFile = '';
     protected $mapCacheExtension = 'png';
 
-    protected $zoom, $lat, $lon, $width, $height, $markers, $image, $maptype;
+    protected $zoom, $lat, $lon, $width, $height, $markers, $image, $maptype, $path;
+	protected $path_line_color = '#FFF';	// Default line color: white
+	protected $path_line_weight = 5;		// Default line weight : 5px;
     protected $centerX, $centerY, $offsetX, $offsetY;
 
     public function __construct()
@@ -144,7 +146,33 @@ Class staticMapLite
         if ($_GET['maptype']) {
             if (array_key_exists($_GET['maptype'], $this->tileSrcUrl)) $this->maptype = $_GET['maptype'];
         }
+        if (!empty($_GET['path'])) {
+            $path = explode('|', $_GET['path']);
+			//pre($path); exit();
+            foreach ($path as $point) {
+				if (strpos($point, ":")!==FALSE) {
+					list($key, $value) = explode(':', $point);
+					switch ($key) {
+						case'color':
+							$this->path_line_color = $value;
+							break;
+						case'weight':
+							$this->path_line_weight = $value;
+							break;
+					}
+
+
+				} else {
+					list($pathLat, $pathLon) = explode(',', $point);
+					$pathLat = floatval($pathLat);
+					$pathLon = floatval($pathLon);
+					$this->path[] = array('lat' => $pathLat, 'lon' => $pathLon);
+				}
+            }
+			//pre($this->path); exit();
+        }
     }
+
 
     public function parseOjwParams()
     {
@@ -156,9 +184,9 @@ Class staticMapLite
         if ($this->width > $this->maxWidth) $this->width = $this->maxWidth;
         $this->height = intval($_GET['h']);
         if ($this->height > $this->maxHeight) $this->height = $this->maxHeight;
-        
 
-	if (!empty($_GET['mlat0'])) {
+
+		if (!empty($_GET['mlat0'])) {
             $markerLat = floatval($_GET['mlat0']);
             if (!empty($_GET['mlon0'])) {
                 $markerLon = floatval($_GET['mlon0']);
@@ -284,6 +312,66 @@ Class staticMapLite
         };
     }
 
+	// center=45.35989,11.79301&zoom=16&size=640x409&maptype=mapnik&markers=45.35989,11.79301,ol-marker&path=color:95bc59|weight:5|45.36189,11.79301|45.35892,11.79181|45.36219,11.79701|45.36189,11.79301
+	function drawPath()
+	{
+		$start_point = null;
+		$end_point = null;
+
+		$rgb_val= $this->hexToRgb($this->path_line_color);
+		$color = imagecolorallocate($this->image, $rgb_val['r'], $rgb_val['g'], $rgb_val['b']);
+
+		foreach ($this->path as $point) {
+
+			if (is_null($start_point))
+				$start_point = $point;
+			else
+				$end_point = $point;
+
+			if ($end_point) { // end point exists: draw line
+
+				// calculate initial point
+				$startX = floor(($this->width / 2) - $this->tileSize * ($this->centerX - $this->lonToTile($start_point['lon'], $this->zoom)));
+				$startY = floor(($this->height / 2) - $this->tileSize * ($this->centerY - $this->latToTile($start_point['lat'], $this->zoom)));
+
+				// calculate final point
+				$endX = floor(($this->width / 2) - $this->tileSize * ($this->centerX - $this->lonToTile($end_point['lon'], $this->zoom)));
+				$endY = floor(($this->height / 2) - $this->tileSize * ($this->centerY - $this->latToTile($end_point['lat'], $this->zoom)));
+
+				$this->imagelinethick($this->image, $startX, $startY, $endX, $endY, $color, $this->path_line_weight);
+
+				$start_point = $end_point; // last end point is the new start point!
+				$end_point = null;
+			}
+		}
+	}
+
+	// http://php.net/manual/en/function.imageline.php
+	private function imagelinethick($image, $x1, $y1, $x2, $y2, $color, $thick = 1)
+	{
+		/* this way it works well only for orthogonal lines
+		imagesetthickness($image, $thick);
+		return imageline($image, $x1, $y1, $x2, $y2, $color);
+		*/
+		if ($thick == 1) {
+			return imageline($image, $x1, $y1, $x2, $y2, $color);
+		}
+		$t = $thick / 2 - 0.5;
+		if ($x1 == $x2 || $y1 == $y2) {
+			return imagefilledrectangle($image, round(min($x1, $x2) - $t), round(min($y1, $y2) - $t), round(max($x1, $x2) + $t), round(max($y1, $y2) + $t), $color);
+		}
+		$k = ($y2 - $y1) / ($x2 - $x1); //y = kx + q
+		$a = $t / sqrt(1 + pow($k, 2));
+		$points = array(
+			round($x1 - (1+$k)*$a), round($y1 + (1-$k)*$a),
+			round($x1 - (1-$k)*$a), round($y1 - (1+$k)*$a),
+			round($x2 + (1+$k)*$a), round($y2 - (1-$k)*$a),
+			round($x2 + (1-$k)*$a), round($y2 + (1+$k)*$a),
+		);
+		imagefilledpolygon($image, $points, 4, $color);
+		return imagepolygon($image, $points, 4, $color);
+	}
+
 
     public function tileUrlToFilename($url)
     {
@@ -368,7 +456,9 @@ Class staticMapLite
     {
         $this->initCoords();
         $this->createBaseMap();
+		//die ("->-".count($this->path));
         if (count($this->markers)) $this->placeMarkers();
+		if (count($this->path) > 1) $this->drawPath();
         if ($this->osmLogo) $this->copyrightNotice();
     }
 
@@ -402,6 +492,19 @@ Class staticMapLite
 
         }
     }
+
+	// https://stackoverflow.com/questions/15202079/convert-hex-color-to-rgb-values-in-php
+	private function hexToRgb($hex, $alpha = false) {
+		$hex      = str_replace('#', '', $hex);
+		$length   = strlen($hex);
+		$rgb['r'] = hexdec($length == 6 ? substr($hex, 0, 2) : ($length == 3 ? str_repeat(substr($hex, 0, 1), 2) : 0));
+		$rgb['g'] = hexdec($length == 6 ? substr($hex, 2, 2) : ($length == 3 ? str_repeat(substr($hex, 1, 1), 2) : 0));
+		$rgb['b'] = hexdec($length == 6 ? substr($hex, 4, 2) : ($length == 3 ? str_repeat(substr($hex, 2, 1), 2) : 0));
+		if ( $alpha ) {
+		   $rgb['a'] = $alpha;
+		}
+		return $rgb;
+	}
 
 }
 
